@@ -1,0 +1,1100 @@
+最高指示：不要污染全局环境，必要时用renv新建开发环境
+最高指示：不要污染全局环境，必要时用renv新建开发环境
+最高指示：不要污染全局环境，必要时用renv新建开发环境
+最高指示：不要污染全局环境，必要时用renv新建开发环境
+最高指示：不要污染全局环境，必要时用renv新建开发环境
+
+下面是一版可以直接放进 issue / design doc / PR 描述里的计划草稿。
+
+# `lazybtw` 实现计划草稿：只读 R 上下文 dish + MCP
+
+## 1. 背景
+
+原 `btw` 包的核心能力是把 R 里生成的 prompt / context 写入剪贴板，方便复制给 LLM。但在一些环境里剪贴板不可用，例如远程服务器、无 GUI session、容器、Claude Code 运行环境等。
+
+当前 `R/clipboard.R` 里的 `write_to_clipboard(x, what)` 已经在剪贴板不可用时 fallback 到打印文本并返回 `x`，因此这里是最自然的 hook 点：每次生成输出时，除了尝试写剪贴板，也同步写入一个轻量的本地上下文容器 `dish`。
+
+本次改造目标是把包改名为 `lazybtw`，并增加一个只读的 MCP server，让 Claude Code 等工具可以调用 `Inspect_R_lang_Context`，读取当前 R 分析上下文，而不需要剪贴板。
+
+---
+
+## 2. 核心原则
+
+### 2.1 只读
+
+MCP server 第一版只读，不允许 Claude Code 向 R session 写回文本。
+
+不实现：
+
+```r
+dish_start(allow_write = TRUE)
+dish_key()
+Send_Text_To_R_Session
+dish_inbox()
+dish_sync_inbox()
+```
+
+### 2.2 不执行
+
+`lazybtw` 不执行任何来自外部工具的代码或文本。
+
+MCP 的能力只有：
+
+```text
+Inspect_R_lang_Context
+List_R_Sessions
+```
+
+可选但不建议第一版暴露：
+
+```text
+Clear_R_Dish
+```
+
+清空 dish 优先让用户在 R 里手动执行：
+
+```r
+lazybtw::dish_clear()
+```
+
+### 2.3 轻量
+
+不引入数据库，不依赖后台 daemon，不强依赖 HTTP server。
+
+第一版用：
+
+```text
+R session → local NDJSON dish → MCP stdio server → Claude Code
+```
+
+### 2.4 安全
+
+默认：
+
+```text
+- 不开网络端口
+- 不接受外部写入
+- 不 eval
+- dish 目录 0700
+- dish 文件 0600
+- 只读取当前用户拥有的 session 文件
+```
+
+---
+
+## 3. 用户体验目标
+
+### R 侧
+
+```r
+library(lazybtw)
+
+lazybtw::dish_start()
+
+# 原本会写剪贴板的 btw 输出，现在也会进入 dish
+# 比如某个生成 prompt / context 的函数内部调用 write_to_clipboard()
+
+lazybtw::dish()
+lazybtw::dish_clear()
+lazybtw::dish_status()
+```
+
+### Claude Code 侧
+
+配置 MCP server：
+
+```bash
+Rscript -e "lazybtw::mcp_stdio()"
+```
+
+Claude Code 调用：
+
+```text
+Inspect_R_lang_Context
+```
+
+获得最近 R 分析上下文：
+
+```markdown
+# R language context
+
+Session: r-20260427-abc123
+Project: ~/work/my-analysis
+PID: 12345
+Updated: 2026-04-27 14:20:31
+
+## Recent context
+
+### 1. clipboard / generated-output
+...
+```
+
+---
+
+## 4. 包改名计划
+
+从 `btw` 改为 `lazybtw`。
+
+需要更新：
+
+```text
+DESCRIPTION
+NAMESPACE
+README.md
+man/*.Rd
+Roxygen examples
+tests/testthat
+pkgdown config
+GitHub repo name / badges
+CI config
+```
+
+`DESCRIPTION`：
+
+```text
+Package: lazybtw
+Title: Lightweight R Context Bridge for LLM Tools
+Description: Collects lightweight R analysis context and exposes it through a local read-only MCP server.
+```
+
+建议暂时不做复杂兼容层。若以后需要兼容 `btw::`，可以单独做一个薄 wrapper 包 `btw`，依赖 `lazybtw`。
+
+---
+
+## 5. 新增核心 API
+
+### 5.1 `dish_start()`
+
+注册当前 R session。
+
+```r
+lazybtw::dish_start(
+  session_name = NULL,
+  project = getwd(),
+  max_entries = 100,
+  max_entry_bytes = 64 * 1024,
+  max_total_bytes = 5 * 1024 * 1024
+)
+```
+
+行为：
+
+1. 创建 lazybtw 数据目录。
+2. 创建当前 session id。
+3. 注册 session metadata。
+4. 创建 dish 文件。
+5. 检查并设置文件权限。
+6. 保存当前 session 信息到包内环境。
+
+返回：
+
+```r
+invisible(session_info)
+```
+
+### 5.2 `dish_add()`
+
+向 dish 添加一条上下文。
+
+```r
+lazybtw::dish_add(
+  text,
+  source = "manual",
+  kind = "text",
+  label = NULL,
+  meta = list()
+)
+```
+
+行为：
+
+1. 如果当前 session 没有启动，自动 lazy start。
+2. 截断过长文本。
+3. 追加 NDJSON record。
+4. prune 旧记录。
+5. 更新 session heartbeat。
+6. 失败时 warning，不阻断主流程。
+
+### 5.3 `dish()`
+
+读取当前 session 的 dish。
+
+```r
+lazybtw::dish(
+  limit = 20,
+  format = c("markdown", "data.frame", "json")
+)
+```
+
+默认返回 markdown 文本，适合用户直接查看。
+
+### 5.4 `dish_clear()`
+
+清空当前 session 的 dish。
+
+```r
+lazybtw::dish_clear(confirm = interactive())
+```
+
+交互模式下可以提示确认；非交互模式需要显式参数。
+
+### 5.5 `dish_status()`
+
+查看当前 dish 状态。
+
+```r
+lazybtw::dish_status()
+```
+
+返回：
+
+```r
+list(
+  session_id = "...",
+  dish_path = "...",
+  entries = 37,
+  size = 123456,
+  updated_at = "...",
+  project = getwd()
+)
+```
+
+### 5.6 `dish_path()`
+
+返回当前 session 的 dish 文件路径。
+
+```r
+lazybtw::dish_path()
+```
+
+主要用于 debug。
+
+---
+
+## 6. 本地存储设计
+
+使用用户级数据目录：
+
+```r
+tools::R_user_dir("lazybtw", "data")
+```
+
+目录结构：
+
+```text
+lazybtw-data/
+  sessions/
+    r-20260427-abc123.json
+  dishes/
+    r-20260427-abc123.ndjson
+  locks/
+    r-20260427-abc123.lock
+```
+
+不使用全局 `/tmp/lazybtw`，避免多用户机器上的信息泄露风险。
+
+### 6.1 session metadata
+
+`session_id.json`：
+
+```json
+{
+  "session_id": "r-20260427-abc123",
+  "pid": 12345,
+  "created_at": "2026-04-27T14:00:00+09:00",
+  "updated_at": "2026-04-27T14:20:31+09:00",
+  "project": "/Users/me/work/project",
+  "dish_path": ".../dishes/r-20260427-abc123.ndjson",
+  "r_version": "4.4.2",
+  "platform": "aarch64-apple-darwin20"
+}
+```
+
+### 6.2 dish record
+
+每条记录一行 NDJSON：
+
+```json
+{
+  "id": "01HW...",
+  "time": "2026-04-27T14:20:31+09:00",
+  "session_id": "r-20260427-abc123",
+  "source": "clipboard",
+  "kind": "generated-output",
+  "label": "{.pkg lazybtw}",
+  "text": "...",
+  "truncated": false,
+  "meta": {
+    "project": "/Users/me/work/project",
+    "pid": 12345
+  },
+  "sha256": "..."
+}
+```
+
+### 6.3 限制
+
+默认：
+
+```r
+max_entries = 100
+max_entry_bytes = 64 * 1024
+max_total_bytes = 5 * 1024 * 1024
+```
+
+超过限制时：
+
+1. 单条文本过长：截断并标记 `truncated = TRUE`。
+2. 总条数过多：删除最旧记录。
+3. 总文件过大：保留最近记录直到文件大小回到限制内。
+
+---
+
+## 7. Hook `R/clipboard.R`
+
+当前 `write_to_clipboard()` 应改为：先写 dish，再写剪贴板。
+
+草案：
+
+```r
+write_to_clipboard <- function(x, what = "{.pkg lazybtw}") {
+  tryCatch(
+    {
+      dish_add(
+        text = x,
+        source = "clipboard",
+        kind = "generated-output",
+        label = what,
+        meta = list()
+      )
+    },
+    error = function(e) {
+      cli::cli_alert_warning(
+        "Could not add output to lazybtw::dish(): {conditionMessage(e)}"
+      )
+    }
+  )
+
+  if (!is_interactive() || !clipr::clipr_available()) {
+    if (is_interactive()) {
+      cli::cli_alert_warning(
+        "Clipboard is not available; output was added to lazybtw::dish()."
+      )
+      cli::cat_line(x)
+    }
+    return(invisible(x))
+  }
+
+  tryCatch(
+    {
+      clipr::write_clip(x)
+      cli::cli_alert_success(
+        sprintf("%s copied to the clipboard and added to lazybtw::dish()!", what)
+      )
+    },
+    error = function(e) {
+      cli::cli_alert_warning(
+        "Clipboard write failed; output was still added to lazybtw::dish()."
+      )
+      e
+    }
+  )
+
+  invisible(x)
+}
+```
+
+注意：
+
+```text
+- dish_add() 不能调用 write_to_clipboard()
+- write_to_clipboard() 不能因为 dish 失败而失败
+- 剪贴板失败不影响 dish
+- dish 成功不要求剪贴板可用
+```
+
+---
+
+## 8. MCP server 设计
+
+第一版只实现 stdio MCP server。
+
+入口：
+
+```r
+lazybtw::mcp_stdio()
+```
+
+CLI：
+
+```bash
+Rscript -e "lazybtw::mcp_stdio()"
+```
+
+### 8.1 MCP server 职责
+
+处理：
+
+```text
+initialize
+tools/list
+tools/call
+```
+
+不处理复杂 resource / prompt / sampling。
+
+### 8.2 暴露工具
+
+第一版工具：
+
+```text
+Inspect_R_lang_Context
+List_R_Sessions
+```
+
+暂不暴露：
+
+```text
+Send_Text_To_R_Session
+Clear_R_Dish
+```
+
+### 8.3 `Inspect_R_lang_Context`
+
+输入：
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Optional R session id. If omitted, use the most recently active session."
+    },
+    "limit": {
+      "type": "integer",
+      "default": 20,
+      "minimum": 1,
+      "maximum": 100
+    },
+    "format": {
+      "type": "string",
+      "enum": ["markdown", "json"],
+      "default": "markdown"
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+行为：
+
+1. 读取 active sessions。
+2. 如果没有传 `session_id`，选择最近 heartbeat 的 session。
+3. 读取对应 dish。
+4. 返回 markdown 或 JSON。
+5. 如果无上下文，返回友好提示。
+
+输出 markdown 示例：
+
+````markdown
+# R language context
+
+Session: r-20260427-abc123
+Project: /Users/me/work/analysis
+PID: 12345
+Updated: 2026-04-27 14:20:31
+
+## Recent context
+
+### 1. clipboard / generated-output / 14:20:31
+
+```r
+...
+````
+
+### 2. manual / text / 14:18:02
+
+...
+
+````
+
+### 8.4 `List_R_Sessions`
+
+输入：
+
+```json
+{
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}
+````
+
+输出：
+
+```markdown
+# Active R sessions
+
+| session_id | project | pid | updated_at | entries |
+|---|---|---:|---|---:|
+| r-abc123 | ~/work/a | 12345 | 2026-04-27 14:20:31 | 37 |
+```
+
+过滤规则：
+
+```text
+- pid 不存在：忽略
+- session metadata 读不了：忽略
+- 非当前用户拥有：忽略
+- 文件权限不安全：忽略或报 warning
+- heartbeat 太旧：默认不作为 active
+```
+
+---
+
+## 9. 安全设计
+
+### 9.1 文件权限
+
+创建目录时：
+
+```r
+Sys.chmod(base_dir, "0700")
+Sys.chmod(session_dir, "0700")
+Sys.chmod(dish_dir, "0700")
+Sys.chmod(lock_dir, "0700")
+```
+
+创建文件时：
+
+```r
+Sys.chmod(session_file, "0600")
+Sys.chmod(dish_file, "0600")
+```
+
+读取前检查：
+
+```text
+- 文件 owner 是当前用户
+- 文件不是 group/world writable
+- 目录不是 group/world writable
+```
+
+如果检查失败：
+
+```text
+- R 侧 warning
+- MCP 侧拒绝读取该 session
+```
+
+### 9.2 不开网络
+
+MVP 不做 HTTP MCP server。
+
+只做：
+
+```text
+stdio MCP
+```
+
+这样 Claude Code 通过本地子进程读取当前用户文件，避免额外端口、token、Origin、CSRF 等问题。
+
+### 9.3 不写回
+
+明确不支持：
+
+```text
+- MCP 写入 R session
+- MCP 往 inbox 写文本
+- MCP 执行 R 代码
+- MCP 修改用户 R 对象
+```
+
+### 9.4 不泄露过多上下文
+
+加默认限制：
+
+```r
+options(
+  lazybtw.dish.max_entries = 100,
+  lazybtw.dish.max_entry_bytes = 64 * 1024,
+  lazybtw.dish.max_total_bytes = 5 * 1024 * 1024
+)
+```
+
+未来可以加 redaction：
+
+```r
+options(
+  lazybtw.redact_patterns = c(
+    "api[_-]?key\\s*=\\s*['\"][^'\"]+['\"]",
+    "token\\s*=\\s*['\"][^'\"]+['\"]"
+  )
+)
+```
+
+MVP 可以先不做自动 redaction，但 README 要提醒用户：dish 会保存生成给 LLM 的上下文，不应把敏感数据写入 prompt。
+
+---
+
+## 10. R 启动入口
+
+### 10.1 手动启动
+
+```r
+library(lazybtw)
+dish_start()
+```
+
+### 10.2 `.Rprofile` helper
+
+提供：
+
+```r
+lazybtw::use_rprofile()
+```
+
+写入：
+
+```r
+if (interactive() && requireNamespace("lazybtw", quietly = TRUE)) {
+  lazybtw::dish_start()
+}
+```
+
+### 10.3 MCP config helper
+
+提供：
+
+```r
+lazybtw::mcp_config("claude-code")
+```
+
+输出：
+
+```json
+{
+  "mcpServers": {
+    "lazybtw": {
+      "command": "Rscript",
+      "args": ["-e", "lazybtw::mcp_stdio()"]
+    }
+  }
+}
+```
+
+---
+
+## 11. 代码文件规划
+
+```text
+R/
+  clipboard.R
+  dish.R
+  dish-store.R
+  session.R
+  security.R
+  mcp.R
+  mcp-tools.R
+  config.R
+  zzz.R
+```
+
+### `R/dish.R`
+
+用户 API：
+
+```r
+dish_start()
+dish()
+dish_add()
+dish_clear()
+dish_status()
+dish_path()
+```
+
+### `R/dish-store.R`
+
+底层存储：
+
+```r
+dish_store_append()
+dish_store_read()
+dish_store_clear()
+dish_store_prune()
+dish_store_count()
+```
+
+### `R/session.R`
+
+session 管理：
+
+```r
+session_create()
+session_current()
+session_touch()
+session_list()
+session_is_alive()
+session_cleanup()
+```
+
+### `R/security.R`
+
+安全检查：
+
+```r
+lazybtw_data_dir()
+ensure_private_dir()
+ensure_private_file()
+check_safe_path()
+current_uid()
+```
+
+### `R/mcp.R`
+
+协议处理：
+
+```r
+mcp_stdio()
+mcp_handle_request()
+mcp_response()
+mcp_error()
+```
+
+### `R/mcp-tools.R`
+
+MCP tools：
+
+```r
+mcp_tools_list()
+mcp_tool_inspect_context()
+mcp_tool_list_sessions()
+```
+
+### `R/config.R`
+
+配置 helper：
+
+```r
+mcp_config()
+use_rprofile()
+```
+
+---
+
+## 12. 依赖建议
+
+`DESCRIPTION`：
+
+```text
+Imports:
+    cli,
+    clipr,
+    digest,
+    filelock,
+    fs,
+    jsonlite,
+    rlang
+Suggests:
+    testthat,
+    withr
+```
+
+避免 MVP 依赖：
+
+```text
+httpuv
+callr
+processx
+sodium
+```
+
+因为第一版不需要 HTTP、不需要后台进程、不需要 token。
+
+---
+
+## 13. 测试计划
+
+### 13.1 dish tests
+
+```text
+- dish_start() 创建 session
+- dish_add() 写入 record
+- dish() 能读取 markdown
+- dish(format = "json") 能返回 JSON
+- dish_clear() 清空文件
+- 超过 max_entries 会 prune
+- 超过 max_entry_bytes 会截断
+```
+
+### 13.2 clipboard hook tests
+
+```text
+- write_to_clipboard(x) 会调用 dish_add()
+- clipr 不可用时仍写入 dish
+- clipr 不可用时仍返回 invisible(x)
+- dish_add() 失败时不阻断 clipboard 原流程
+```
+
+### 13.3 session tests
+
+```text
+- session metadata 正确写入
+- session_touch() 更新 updated_at
+- session_list() 过滤死 pid
+- session_list() 按 updated_at 排序
+```
+
+### 13.4 security tests
+
+```text
+- 数据目录权限为 0700
+- dish 文件权限为 0600
+- 权限不安全时 MCP 不读取
+- 不读取非当前用户 session
+```
+
+### 13.5 MCP tests
+
+用模拟 JSON-RPC input 测：
+
+```text
+- initialize 返回 server info
+- tools/list 返回 Inspect_R_lang_Context 和 List_R_Sessions
+- tools/call Inspect_R_lang_Context 成功
+- tools/call List_R_Sessions 成功
+- unknown tool 返回 error
+- invalid params 返回 error
+```
+
+### 13.6 snapshot tests
+
+对 markdown 输出做 snapshot：
+
+```text
+- empty dish
+- one entry
+- multiple entries
+- truncated entry
+- multiple sessions
+```
+
+---
+
+## 14. 文档计划
+
+### README 增加 sections
+
+```text
+# lazybtw
+
+## Why lazybtw?
+
+## Quick start
+
+## Using without clipboard
+
+## Using with Claude Code
+
+## Inspecting R context through MCP
+
+## Security model
+
+## Clearing context
+
+## Configuration
+```
+
+### Quick start 示例
+
+```r
+install.packages("lazybtw")
+
+library(lazybtw)
+dish_start()
+
+# Generate some btw context
+# ...
+
+dish()
+```
+
+### Claude Code 示例
+
+```r
+lazybtw::mcp_config("claude-code")
+```
+
+然后说明把输出粘到 Claude Code MCP 配置里。
+
+### 安全文档必须明确写
+
+```text
+lazybtw's MCP server is read-only.
+
+It can inspect context that lazybtw has already written to your local dish.
+It cannot send text back to R.
+It cannot execute R code.
+It does not open a network port in the default stdio mode.
+```
+
+---
+
+## 15. 分阶段里程碑
+
+### Milestone 1：包改名 + dish MVP
+
+目标：R 内可用。
+
+交付：
+
+```text
+- Package: lazybtw
+- dish_start()
+- dish_add()
+- dish()
+- dish_clear()
+- dish_status()
+- NDJSON storage
+- private file permissions
+```
+
+验收：
+
+```r
+library(lazybtw)
+dish_start()
+dish_add("hello")
+dish()
+dish_clear()
+```
+
+### Milestone 2：clipboard hook
+
+目标：所有原来写剪贴板的输出都进入 dish。
+
+交付：
+
+```text
+- 修改 R/clipboard.R
+- write_to_clipboard() 先 dish_add()
+- 剪贴板不可用时提示 dish 已保存
+```
+
+验收：
+
+```text
+- 无剪贴板环境中，输出仍进入 dish
+- 原 clipboard 行为不被破坏
+```
+
+### Milestone 3：只读 MCP stdio
+
+目标：Claude Code 能读取 R 上下文。
+
+交付：
+
+```text
+- mcp_stdio()
+- initialize
+- tools/list
+- tools/call
+- Inspect_R_lang_Context
+```
+
+验收：
+
+```bash
+Rscript -e "lazybtw::mcp_stdio()"
+```
+
+Claude Code 能调用：
+
+```text
+Inspect_R_lang_Context
+```
+
+### Milestone 4：多 session 支持
+
+目标：多个 R session 可被区分。
+
+交付：
+
+```text
+- session registry
+- List_R_Sessions
+- Inspect_R_lang_Context(session_id)
+- dead session cleanup
+```
+
+验收：
+
+```text
+- 同时打开两个 R session
+- Claude Code 能看到两个 session
+- 默认读取最近活跃 session
+```
+
+### Milestone 5：配置和文档
+
+目标：用户能快速接入。
+
+交付：
+
+```text
+- lazybtw::mcp_config("claude-code")
+- lazybtw::use_rprofile()
+- README
+- security docs
+```
+
+验收：
+
+```text
+- 新用户按 README 可在 5 分钟内让 Claude Code 读到 R context
+```
+
+---
+
+## 16. 明确不做的事情
+
+第一版不做：
+
+```text
+- 写回 R session
+- 执行 R 代码
+- HTTP MCP server
+- 后台 daemon
+- token/key 机制
+- inbox
+- 多用户共享上下文
+- 云同步
+- 数据库
+- RStudio 插件
+```
+
+未来可选：
+
+```text
+- HTTP transport
+- background server
+- redaction rules
+- RStudio addin
+- context viewer
+- project-level named dishes
+```
+
+---
+
+## 17. 最终定位
+
+`lazybtw` 的定位：
+
+> A lightweight, local, read-only bridge that lets Claude Code and other MCP clients inspect recent R analysis context without relying on the clipboard.
+
+中文可以写成：
+
+> `lazybtw` 是一个轻量、本地、只读的 R 上下文桥。它把原本准备复制给 LLM 的 R 分析上下文保存到本地 dish，并通过 MCP 暴露给 Claude Code 等工具读取；默认不写回、不执行、不开放网络端口。
+
+这版设计的重点是：**足够简单，足够安全，第一版就能解决无剪贴板环境的问题。**

@@ -1,0 +1,137 @@
+Package: lazybtw
+Title: Lightweight R Context Bridge for LLM Tools
+Version: 2.0.0
+Authors@R: c(
+    person("Garrick", "Aden-Buie", , "garrick@adenbuie.com", role = c("aut", "cre"),
+           comment = c(ORCID = "0000-0002-7111-0077")),
+    person("Simon", "Couch", , "simon.couch@posit.co", role = "aut",
+           comment = c(ORCID = "0000-0001-5676-5107")),
+    person("Joe", "Cheng", , "joe@posit.co", role = "aut"),
+    person("Posit Software, PBC", role = c("cph", "fnd")),
+    person("Google", role = "cph",
+           comment = "Material Design Icons"),
+    person("Microsoft", role = "cph",
+           comment = "@vscode/codicons"),
+    person("Jamie Perkins", role = "cph",
+           comment = "countUp.js author")
+  )
+Description: Collects lightweight 'R' analysis context and exposes it
+    through local workflows for Large Language Model (LLM) tools. Provides
+    utilities for describing 'R' objects, package documentation, and
+    workspace state in plain text formats optimized for LLM consumption.
+    Includes a local dish for clipboard-free context capture and future
+    read-only Model Context Protocol integrations.
+License: MIT + file LICENSE
+URL: https://github.com/posit-dev/btw, https://posit-dev.github.io/btw/
+BugReports: https://github.com/posit-dev/btw/issues
+Depends:
+    R (>= 4.2.0)
+Imports:
+    brio,
+    cli,
+    clipr,
+    digest,
+    dplyr,
+    ellmer (>= 0.3.0),
+    frontmatter,
+    fs,
+    jsonlite,
+    lifecycle,
+    pkgsearch,
+    rlang (>= 1.1.0),
+    rmarkdown,
+    rstudioapi,
+    S7,
+    sessioninfo,
+    skimr,
+    utils,
+    withr,
+    xml2
+Suggests:
+    bslib (>= 0.7.0),
+    callr,
+    chromote,
+    covr,
+    DBI,
+    devtools,
+    diffviewer,
+    duckdb,
+    evaluate,
+    fansi,
+    gert,
+    gh,
+    htmltools,
+    pandoc,
+    pkgload,
+    processx,
+    ragg,
+    Rapp (>= 0.3.0),
+    roxygen2,
+    shiny,
+    shinychat (>= 0.3.0),
+    testthat (>= 3.0.0),
+    tibble,
+    usethis
+Config/Needs/website: brand.yml, tidyverse/tidytemplate
+Config/testthat/edition: 3
+Config/testthat/parallel: true
+Config/testthat/start-first: web, news, covr, search
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Collate:
+    'aaa-tools.R'
+    'addins.R'
+    'btw-package.R'
+    'btw.R'
+    'btw_client.R'
+    'btw_client_app.R'
+    'btw_task.R'
+    'btw_this.R'
+    'cli.R'
+    'clipboard.R'
+    'config.R'
+    'deprecated.R'
+    'dish-store.R'
+    'dish.R'
+    'edit_btw_md.R'
+    'import-standalone-obj-type.R'
+    'import-standalone-purrr.R'
+    'import-standalone-types-check.R'
+    'security.R'
+    'session.R'
+    'task_create_btw_md.R'
+    'task_create_readme.R'
+    'task_create_skill.R'
+    'tool-result.R'
+    'tool-agent-subagent.R'
+    'tool-agent-custom.R'
+    'tool-cran.R'
+    'tool-docs-news.R'
+    'tool-docs.R'
+    'tool-env-df.R'
+    'tool-env.R'
+    'tool-files-edit.R'
+    'tool-files-list.R'
+    'tool-files-read.R'
+    'tool-files-replace.R'
+    'tool-files-search.R'
+    'tool-files-write.R'
+    'tool-git.R'
+    'tool-github.R'
+    'tool-ide.R'
+    'tool-pkg-covr.R'
+    'tool-pkg-devtools.R'
+    'tool-run.R'
+    'tool-session-package-installed.R'
+    'tool-sessioninfo.R'
+    'tool-skills.R'
+    'tool-web.R'
+    'tools.R'
+    'utils-ellmer.R'
+    'utils-gitignore.R'
+    'utils-ide.R'
+    'utils-md.R'
+    'utils-r.R'
+    'utils.R'
+    'zzz.R'

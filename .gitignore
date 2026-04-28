@@ -1,0 +1,35 @@
+# R session/user files
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+
+# R build/check outputs
+*.Rcheck/
+*.tar.gz
+
+# renv local library/cache
+renv/
+renv.lock
+
+# Local MCP/client config with machine-specific absolute paths
+.mcp.json
+
+# lazybtw generated/debug files
+.lazybtw-mcp-smoke/
+.lazybtw-mcp-debug/
+exec/lazybtw-mcp
+exec/lazybtw-mcp-debug.py
+
+# Native build artifacts
+*.o
+*.so
+*.dll
+*.dylib
+*.a
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

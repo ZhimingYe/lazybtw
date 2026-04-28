@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+
+src="exec/lazybtw-mcp.c"
+out="exec/lazybtw-mcp"
+
+if [ ! -f "$src" ]; then
+  echo "configure: $src not found; skipping lazybtw-mcp build" >&2
+  exit 0
+fi
+
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  Linux|Darwin|FreeBSD|OpenBSD|NetBSD)
+    ;;
+  *)
+    echo "configure: unsupported platform for lazybtw-mcp; skipping build" >&2
+    exit 0
+    ;;
+esac
+
+CC=${CC:-cc}
+CFLAGS=${CFLAGS:-"-O2 -Wall -Wextra"}
+
+printf '%s\n' "configure: building $out with $CC"
+# shellcheck disable=SC2086
+$CC $CFLAGS -o "$out" "$src"
+chmod 0755 "$out"

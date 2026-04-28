@@ -1,0 +1,113 @@
+url: https://posit-dev.github.io/btw/
+
+development:
+  mode: auto
+
+authors:
+  Garrick Aden-Buie:
+    href: https://garrickadenbuie.com
+  Simon Couch:
+    href: https://www.simonpcouch.com/
+
+template:
+  light-switch: true
+  theme: github-light
+  theme-dark: github-dark
+  bslib:
+    version: 5
+    preset: default
+    brand:
+      color:
+        palette:
+          # Core colors from the image
+          white: "#FFFFFF"
+          black: "#000000"
+          mint: "#CAE0D1"  # Light background color
+          raccoon-grey: "#808080"  # Main grey from raccoon
+          raccoon-dark: "#404040"  # Darker grey from raccoon
+
+          # Chart colors mapped to Bootstrap standards
+          blue: "#4B9CD3"  # From the charts
+          indigo: "#6610f2"  # Bootstrap standard
+          purple: "#6d35bb"  # From the purple chart elements
+          pink: "#E683A9"  # Soft pink from elements
+          red: "#E57B7B"  # Soft red from chart elements
+          orange: "#F4B183"  # Muted orange from charts
+          yellow: "#F8C471"  # From chart elements
+          green: "#75B798"  # From chart elements
+          teal: "#83C5BE"  # Soft teal from chart elements
+          cyan: "#A7D5E5"  # Light blue/cyan from charts
+
+        foreground: black
+        background: white
+        primary: blue
+        secondary: raccoon-grey
+        success: green
+        info: cyan
+        warning: orange
+        danger: red
+        light: mint
+        dark: raccoon-dark
+
+
+      typography:
+        link:
+          color: "#246794"
+        monospace-inline:
+          color: purple
+    navbar-padding-y: 1rem
+    pkgdown-nav-height: 72px
+    navbar-light-bg: "#e5f0e9"
+    navbar-dark-bg: "#2E273F"
+    code-color-dark: "var(--brand-pink)"
+    code-bg: "HSL(265 16% 97% / 1)"
+    link-color-dark: "#FC995F"
+
+reference:
+- title: Core functions
+  contents:
+  - btw
+  - btw_this
+  - btw_client
+  - btw_tools
+  - mcp
+  - install_btw_cli
+
+- title: Project Context
+  contents:
+  - use_btw_md
+  - btw_task_create_btw_md
+
+- title: Describe R stuff
+  contents:
+  - btw_this
+  - has_concept("btw formatting methods")
+
+- title: Agent Skills
+  contents:
+    - btw_tool_skill
+    - contains("_skill")
+
+- title: Tasks and Agents
+  desc: |
+    Tasks, or agents, are higher-level functions that combine system prompts and
+    tools to perform more complex operations.
+
+    Tasks are typically designed for interactive use (e.g. to collaboratively
+    create a project context file), but they can also be used programmatically.
+  contents:
+  - btw_task
+  - btw_agent_tool
+  - starts_with("btw_task_")
+  # TODO update docs: Agents are similar, but are designed to be used primarily as tools by other LLMs.
+  - starts_with("btw_agent_")
+
+- title: Tools
+  desc: |
+    Register all of these tools with an `{ellmer}` chat using
+    `chat$register_tools(btw_tools())`. These tools generally all have
+    counterparts available via `btw()` and `btw_this()` for interactive use.
+    The long and awkward function names are for LLMs and to avoid name
+    clashes with other tools.
+  contents:
+  - starts_with("btw_tool_")
